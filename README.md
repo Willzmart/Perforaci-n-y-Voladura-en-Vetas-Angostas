@@ -1,6 +1,6 @@
 # Voladura en vetas angostas: avance y producción
 
-Web app en Streamlit para diseñar la perforación y voladura en **vetas angostas y labores artesanales subterráneas**. Cubre sólo labores horizontales de avance en veta y métodos de producción en veta. Se basa en:
+Web app en Streamlit para diseñar la perforación y voladura en **vetas angostas y labores artesanales subterráneas**. Cubre tres labores: avance en veta, avance en desmonte y producción en veta. Se basa en:
 
 - **[C]** Carpio Chávez, A. (2025). *Diseño de perforación y voladura de labores de avance*. Cusco.
 - **[LJ]** López Jimeno, C. et al. (1987). *Manual de perforación y voladura de rocas*. IGME, Madrid. Cap. 20, 22 y 24.
@@ -27,6 +27,16 @@ streamlit run app.py
   - La app compara la dilución, la ley diluida y el contenido metálico contra el disparo a frente completo.
   - Ejemplo con un frente de 1.8 × 2.1 m y una veta de 0.40 m a 70°: la dilución baja de ≈ 75 % a ≈ 9 %.
 - **Equipos:** jackleg, stoper y martillo manual con empujador [LJ §6]. Los cartuchos de 7/8" son los predeterminados.
+
+## Avance en desmonte
+
+Para cruceros, accesos o ventanas hacia la veta, by-pass, cámaras de refugio y galerías exploratorias en roca estéril.
+
+- **Mismos cueles, secciones y métodos de carga** que el avance en veta. El cuele va centrado por defecto; se puede desplazar hacia un hastial o cambiar su altura.
+- **Contorno:** en labores permanentes la voladura controlada viene activada por defecto [LJ cap. 22]. Si se desactiva, la app lo advierte.
+- **Acarreo:** sobreexcavación, esponjamiento, volumen esponjado y viajes por disparo (carretilla, carro U-35, U-60, scoop pequeño o capacidad propia).
+- **Programa de avance:** a partir de la longitud de la labor y los disparos por guardia calcula disparos, días, explosivo total, desmonte total y costo de perforación y voladura. Incluye una curva de avance acumulado.
+- **Indicadores por metro:** kg/m, m perforados/m y US$/m.
 
 ## Producción en veta
 

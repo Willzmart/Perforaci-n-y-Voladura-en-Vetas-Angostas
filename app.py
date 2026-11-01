@@ -24,7 +24,8 @@ from core.cuts import CUT_NOTES
 from core.produccion import CE0_TABLE, CRITERIA, ProdOptions
 from core.sections import GALLERY_TYPES, build_section
 from core.veta import Vein, oversize_pct
-from core.vetas import EQUIPOS, VETA_CUTS, VETA_PROD, run_avance_veta, run_prod_veta
+from core.vetas import (ACARREO, DESMONTE_TIPOS, EQUIPOS, VETA_CUTS, VETA_PROD, run_avance_desmonte,
+                        run_avance_veta, run_prod_veta)
 
 st.set_page_config(page_title="Voladura en vetas angostas", layout="wide")
 ASSETS = Path(__file__).parent / "assets"
@@ -39,7 +40,8 @@ SECCIONES = {"1.00 × 1.50 (artesanal)": (1.0, 1.5), "1.20 × 1.80": (1.2, 1.8),
 
 # =============================================================================
 st.sidebar.title("Datos de entrada")
-labor = st.sidebar.radio("Labor", ["Avance en veta", "Producción en veta"], horizontal=True)
+labor = st.sidebar.radio("Labor", ["Avance en veta", "Avance en desmonte", "Producción en veta"])
+DESM = labor == "Avance en desmonte"
 
 
 def explosive_picker(label, default, cart_default, key):
@@ -59,18 +61,21 @@ def explosive_picker(label, default, cart_default, key):
     return make_explosive(name, cart)
 
 
-with st.sidebar.expander("Veta", expanded=True):
-    c1, c2 = st.columns(2)
-    w_v = c1.number_input("Potencia real (m)", 0.05, 5.0, 0.40, 0.05)
-    dip = c2.number_input("Buzamiento (°)", 10.0, 90.0, 70.0, 1.0)
-    unit = c1.selectbox("Unidad de ley", ["g/t", "%"])
-    grade = c2.number_input("Ley de la veta", 0.0, 1000.0, 10.0 if unit == "g/t" else 2.0, 0.1)
-    rho_o = c1.number_input("Densidad mineral (t/m³)", 2.0, 5.0, 2.80, 0.05)
-    rho_w = c2.number_input("Densidad caja (t/m³)", 2.0, 4.0, 2.65, 0.05)
-    xv = st.number_input("Posición del eje de la veta en el frente (m)", -2.0, 2.0, 0.0, 0.05,
-                         help="Distancia horizontal desde el eje de la labor, medida a media altura.") \
-        if labor.startswith("Avance") else 0.0
-    ob = st.slider("Sobrerrotura de la voladura selectiva (%)", 0, 40, 10) / 100
+if DESM:
+    w_v, dip, unit, grade, rho_o, rho_w, xv, ob = 0.4, 70.0, "g/t", 0.0, 2.8, 2.65, 0.0, 0.1
+else:
+    with st.sidebar.expander("Veta", expanded=True):
+        c1, c2 = st.columns(2)
+        w_v = c1.number_input("Potencia real (m)", 0.05, 5.0, 0.40, 0.05)
+        dip = c2.number_input("Buzamiento (°)", 10.0, 90.0, 70.0, 1.0)
+        unit = c1.selectbox("Unidad de ley", ["g/t", "%"])
+        grade = c2.number_input("Ley de la veta", 0.0, 1000.0, 10.0 if unit == "g/t" else 2.0, 0.1)
+        rho_o = c1.number_input("Densidad mineral (t/m³)", 2.0, 5.0, 2.80, 0.05)
+        rho_w = c2.number_input("Densidad caja (t/m³)", 2.0, 4.0, 2.65, 0.05)
+        xv = st.number_input("Posición del eje de la veta en el frente (m)", -2.0, 2.0, 0.0, 0.05,
+                             help="Distancia horizontal desde el eje de la labor, medida a media altura.") \
+            if labor.startswith("Avance") else 0.0
+        ob = st.slider("Sobrerrotura de la voladura selectiva (%)", 0, 40, 10) / 100
 vein = Vein(width=w_v, dip_deg=dip, x_center=xv, grade=grade, unit=unit, rho_ore=rho_o, rho_waste=rho_w, overbreak=ob)
 
 with st.sidebar.expander("Macizo rocoso", expanded=False):
@@ -95,9 +100,13 @@ with st.sidebar.expander("Iniciación y costos", expanded=False):
 res, err = None, None
 try:
     if labor.startswith("Avance"):
+        if DESM:
+            with st.sidebar.expander("Labor en desmonte", expanded=True):
+                tipo_d = st.selectbox("Tipo de labor", list(DESMONTE_TIPOS))
+                perm = DESMONTE_TIPOS[tipo_d]
         with st.sidebar.expander("Sección y cuele", expanded=True):
             kind = st.selectbox("Tipo de labor", GALLERY_TYPES, index=3)
-            pres = st.selectbox("Sección", list(SECCIONES), index=4)
+            pres = st.selectbox("Sección", list(SECCIONES), index=4, key=f"sec{DESM}")
             dd = SECCIONES[pres] or (1.8, 2.1)
             c1, c2 = st.columns(2)
             A = c1.number_input("Ancho (m)", 0.8, 3.5, float(dd[0]), 0.05)
@@ -106,10 +115,21 @@ try:
             top_w = st.number_input("Ancho en el techo (m)", 0.3, A, round(0.8 * A, 2), 0.05) if kind.startswith("Trap") else None
             cut_type = st.selectbox("Cuele", VETA_CUTS, index=2)
             st.caption(CUT_NOTES.get(cut_type, ""))
-            cut_in_vein = st.checkbox("Ubicar el cuele en la veta", True,
-                                      help="La veta, más fracturada o blanda, funciona como alivio natural.")
-            two_stage = st.checkbox("Voladura en dos etapas (veta + desquinche de caja)", False,
-                                    help="Primero se vuela y limpia la veta; luego la caja. Reduce la dilución.")
+            cut_x, cut_h = 0.0, None
+            if DESM:
+                cut_in_vein = two_stage = False
+                if st.checkbox("Ubicar el cuele manualmente", False,
+                               help="Por defecto el cuele va centrado, a ≈ 1/3 de la altura. Desplazarlo hacia un "
+                                    "hastial o hacia abajo ayuda a orientar la salida y a reducir el lanzamiento."):
+                    c1, c2 = st.columns(2)
+                    cut_x = c1.number_input("Desplazamiento lateral (m)", -1.5, 1.5, 0.0, 0.05,
+                                            help="Se limita para que el cuele no quede pegado al hastial.")
+                    cut_h = c2.number_input("Altura del centro del cuele (m)", 0.3, 3.0, round(0.4 * Hs, 2), 0.05)
+            else:
+                cut_in_vein = st.checkbox("Ubicar el cuele en la veta", True,
+                                          help="La veta, más fracturada o blanda, funciona como alivio natural.")
+                two_stage = st.checkbox("Voladura en dos etapas (veta + desquinche de caja)", False,
+                                        help="Primero se vuela y limpia la veta; luego la caja. Reduce la dilución.")
             burn_sp = st.number_input("Distancia entre ejes del cuele (m)", 0.06, 0.30, 0.12, 0.01) \
                 if cut_type in ("Quemado simple", "Quemado Sarrois") and st.checkbox("Fijar distancia del cuele") else None
         with st.sidebar.expander("Perforación", expanded=False):
@@ -127,15 +147,34 @@ try:
             exc = explosive_picker("Explosivo de corona", "Emulnor 500", '1" x 8"', "ac")
             charge_method = st.selectbox("Método de carga", CHARGE_METHODS, index=1)
             contour_mode = st.selectbox("Contorno", ["Sin voladura controlada (f = 1.2, S/B = 1.25)",
-                                                     "Voladura controlada (S = K·Ø1, q = 90·Ø1²)"])
+                                                     "Voladura controlada (S = K·Ø1, q = 90·Ø1²)"],
+                                        index=1 if (DESM and perm) else 0, key=f"cont{DESM and perm}")
             beff = st.slider("Eficiencia de voladura (%)", 70, 100, 90) / 100
-        key = f"A|{cut_type}"
+        if DESM:
+            with st.sidebar.expander("Acarreo y programa de avance", expanded=False):
+                c1, c2 = st.columns(2)
+                ob_d = c1.slider("Sobreexcavación (%)", 0, 40, 5 if contour_mode.startswith("Voladura") else 15,
+                                 key=f"obd{contour_mode[:3]}") / 100
+                sw_d = c2.slider("Esponjamiento (%)", 20, 80, 50) / 100
+                hv = st.selectbox("Medio de acarreo", list(ACARREO), index=1)
+                cap = ACARREO[hv] if ACARREO[hv] else st.number_input("Capacidad (m³)", 0.02, 10.0, 0.5, 0.01)
+                fill = c1.slider("Factor de llenado", 0.5, 1.0, 0.9, 0.05)
+                L_lab = c2.number_input("Longitud de la labor (m)", 1.0, 5000.0, 100.0, 5.0)
+                spg = c1.number_input("Disparos por guardia", 1, 3, 1)
+                gpd = c2.number_input("Guardias por día", 1, 3, 2)
+        key = f"{labor}|{cut_type}"
         ov = ss.overrides.get(key, (None, None))
         section = build_section(kind, A, Hs, r_arch, top_w)
         drill = Drill(d1_mm=d1, d2_mm=d2, NB=int(NB), bar_m=bar * 0.3048, eff=eff / 100, F_value=Fv)
         opts = AvanceOptions(cut_type=cut_type, burn_spacing=burn_sp, contour_mode=contour_mode, blast_eff=beff,
-                             charge_method=charge_method, narrow=True, B_prod_override=ov[0], SB_prod=ov[1] or 1.25)
-        res = run_avance_veta(section, rock, drill, exm, exc, opts, vein, cut_in_vein, two_stage, cost)
+                             charge_method=charge_method, narrow=True, B_prod_override=ov[0], SB_prod=ov[1] or 1.25,
+                             cut_x=cut_x, cut_height=cut_h)
+        if DESM:
+            res = run_avance_desmonte(section, rock, drill, exm, exc, opts, tipo_d,
+                                      dict(swell=sw_d, overbreak=ob_d, cap_m3=cap, fill=fill),
+                                      dict(length=L_lab, shots_shift=int(spg), shifts_day=int(gpd)), cost)
+        else:
+            res = run_avance_veta(section, rock, drill, exm, exc, opts, vein, cut_in_vein, two_stage, cost)
         main_exp = exm
     else:
         with st.sidebar.expander("Método de explotación", expanded=True):
@@ -208,11 +247,13 @@ sig = (labor, res.metodo, len(H), round(float(H.x.sum()), 3), round(float(H.kg.s
 if ss.seq_sig != sig:
     ss.seq = None
 S = res.summary
-V = res.p["veta"]
+V = res.p.get("veta", {})
+DM = res.p.get("desmonte", {})
 
 # =============================================================================
-st.title("Voladura en vetas angostas — " + ("avance" if labor.startswith("Avance") else "producción"))
-st.caption(res.metodo if labor.startswith("Avance") else label)
+st.title("Voladura en vetas angostas — " + {"Avance en veta": "avance en veta", "Avance en desmonte": "avance en desmonte",
+                                             "Producción en veta": "producción"}[labor])
+st.caption((tipo_d + " · " + res.metodo) if DESM else (res.metodo if labor.startswith("Avance") else label))
 m = st.columns(6)
 m[0].metric("Taladros + vacíos", f"{len(H)} + {0 if res.relief is None else len(res.relief)}")
 if "Avance por disparo (m)" in S:
@@ -220,15 +261,20 @@ if "Avance por disparo (m)" in S:
 else:
     m[1].metric("Volumen por voladura", f"{S['Volumen roto (m³)']:.1f} m³")
 m[2].metric("Explosivo", f"{S['Explosivo total (kg)']:.1f} kg")
-m[3].metric("Mineral enviado", f"{V['T_ore_pile']:.1f} t")
-m[4].metric("Dilución", f"{V['dilucion'] * 100:.0f} %")
-m[5].metric(f"Ley diluida ({vein.unit})", f"{V['ley_diluida']:.2f}")
+if DESM:
+    m[3].metric("Desmonte/disparo", f"{DM['T']:.1f} t")
+    m[4].metric("Carga (kg/m³)", f"{S['Factor de carga (kg/m³)']:.2f}")
+    m[5].metric("Costo (US$/m)", f"{S.get('Costo por metro de avance (US$/m)', float('nan')):.0f}")
+else:
+    m[3].metric("Mineral enviado", f"{V['T_ore_pile']:.1f} t")
+    m[4].metric("Dilución", f"{V['dilucion'] * 100:.0f} %")
+    m[5].metric(f"Ley diluida ({vein.unit})", f"{V['ley_diluida']:.2f}")
 if ss.overrides.get(key, (None, None))[0]:
     st.info(f"Burden impuesto por la optimización de P80: B = {ss.overrides[key][0]:.2f} m.")
 for w in dict.fromkeys(res.warnings):
     st.warning(w)
 
-tabs = st.tabs(["Memoria de cálculo", "Veta y dilución", "Fragmentación (P80)", "Vista 2D", "Vista 3D y carguío",
+tabs = st.tabs(["Memoria de cálculo", "Acarreo y programa" if DESM else "Veta y dilución", "Fragmentación (P80)", "Vista 2D", "Vista 3D y carguío",
                 "Secuenciamiento", "Resumen y exportación"])
 
 with tabs[0]:
@@ -245,33 +291,64 @@ with tabs[0]:
             st.dataframe(log[log.Fase == fase].drop(columns="Fase"), hide_index=True, width="stretch")
 
 with tabs[1]:
-    c = st.columns(4)
-    c[0].metric("Mineral in situ", f"{V['T_o']:.1f} t")
-    c[1].metric("Desmonte", f"{V['T_w']:.1f} t")
-    c[2].metric("Dilución", f"{V['dilucion'] * 100:.1f} %")
-    c[3].metric("Contenido metálico", V["metal_txt"])
-    if labor.startswith("Avance"):
-        from core.veta import balance
-        one = balance(V["T_o"], V["T_w"], vein, False)
-        two = balance(V["T_o"], V["T_w"], vein, True)
-        comp = pd.DataFrame({
-            "Frente completo": [one["T_ore_pile"], one["dilucion"] * 100, one["ley_diluida"], len(H), H.kg.sum()],
-            "Dos etapas (veta + desquinche)": [two["T_ore_pile"], two["dilucion"] * 100, two["ley_diluida"],
-                                               len(H), H.kg.sum()]},
-            index=["Enviado como mineral (t)", "Dilución (%)", f"Ley diluida ({vein.unit})", "Taladros", "Explosivo (kg)"])
-        st.subheader("Comparación: frente completo vs voladura en dos etapas")
-        st.dataframe(comp.round(2), width="stretch")
-        st.markdown("En dos etapas se vuela primero la veta (con el cuele en el mineral), se limpia el mineral y luego "
-                    "se dispara la caja (desquinche) hacia el hueco dejado. La dilución queda limitada a la "
-                    "sobrerrotura; a cambio el ciclo toma más tiempo y se manipulan dos disparos.")
-        if V.get("two_stage"):
-            g = H.groupby("etapa").agg(Taladros=("id", "count"), kg=("kg", "sum"))
-            g.index = ["Etapa 1 — veta", "Etapa 2 — caja"][:len(g)]
-            st.dataframe(g.round(2), width="stretch")
-    fig = go.Figure(go.Pie(labels=["Mineral", "Desmonte"], values=[V["T_o"], V["T_w"]], hole=0.5,
-                           marker=dict(colors=["#e6b41e", "#8c8c8c"]), sort=False))
-    fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0))
-    st.plotly_chart(fig, width="stretch")
+    if DESM:
+        c = st.columns(4)
+        c[0].metric("Desmonte por disparo", f"{DM['T']:.1f} t")
+        c[1].metric("Volumen esponjado", f"{DM['V_esp']:.2f} m³")
+        c[2].metric("Viajes por disparo", f"{DM['trips']}")
+        c[3].metric("Explosivo por metro", f"{DM['kg_m']:.2f} kg/m")
+        c = st.columns(4)
+        c[0].metric("Disparos para la labor", f"{DM['n_shots']}")
+        c[1].metric("Días de avance", f"{DM['days']:.1f}")
+        c[2].metric("Explosivo total", f"{S['Explosivo total de la labor (kg)']:.0f} kg")
+        c[3].metric("Costo PyV de la labor", f"US$ {S.get('Costo de perforación y voladura de la labor (US$)', 0):,.0f}")
+        adv_ = S["Avance por disparo (m)"]
+        n_ = DM["n_shots"]
+        if n_:
+            dist = np.minimum(np.arange(1, n_ + 1) * adv_, L_lab)
+            days_ = np.arange(1, n_ + 1) / (spg * gpd)
+            fig = go.Figure(go.Scatter(x=days_, y=dist, mode="lines", line=dict(width=3, color="#1f4e9c"),
+                                       name="Avance acumulado"))
+            fig.update_layout(height=320, xaxis_title="Días", yaxis_title="Avance acumulado (m)", plot_bgcolor="white",
+                              margin=dict(l=10, r=10, t=30, b=10), title="Programa de avance")
+            st.plotly_chart(fig, width="stretch")
+        cst = {k.replace("Costo ", "").replace(" (US$)", ""): S[k] for k in
+               ["Costo perforación (US$)", "Costo explosivo (US$)", "Costo accesorios (US$)"] if k in S}
+        if cst:
+            fig = go.Figure(go.Bar(x=list(cst), y=[v / adv_ for v in cst.values()], marker_color="#8c8c8c"))
+            fig.update_layout(height=280, yaxis_title="US$ por metro de avance", plot_bgcolor="white",
+                              margin=dict(l=10, r=10, t=30, b=10), title="Costo de perforación y voladura por metro")
+            st.plotly_chart(fig, width="stretch")
+        st.caption("El tiempo de ciclo real depende también de la limpieza, el sostenimiento y la ventilación; los "
+                   "días calculados sólo consideran el número de disparos por guardia.")
+    else:
+        c = st.columns(4)
+        c[0].metric("Mineral in situ", f"{V['T_o']:.1f} t")
+        c[1].metric("Desmonte", f"{V['T_w']:.1f} t")
+        c[2].metric("Dilución", f"{V['dilucion'] * 100:.1f} %")
+        c[3].metric("Contenido metálico", V["metal_txt"])
+        if labor.startswith("Avance"):
+            from core.veta import balance
+            one = balance(V["T_o"], V["T_w"], vein, False)
+            two = balance(V["T_o"], V["T_w"], vein, True)
+            comp = pd.DataFrame({
+                "Frente completo": [one["T_ore_pile"], one["dilucion"] * 100, one["ley_diluida"], len(H), H.kg.sum()],
+                "Dos etapas (veta + desquinche)": [two["T_ore_pile"], two["dilucion"] * 100, two["ley_diluida"],
+                                                   len(H), H.kg.sum()]},
+                index=["Enviado como mineral (t)", "Dilución (%)", f"Ley diluida ({vein.unit})", "Taladros", "Explosivo (kg)"])
+            st.subheader("Comparación: frente completo vs voladura en dos etapas")
+            st.dataframe(comp.round(2), width="stretch")
+            st.markdown("En dos etapas se vuela primero la veta (con el cuele en el mineral), se limpia el mineral y luego "
+                        "se dispara la caja (desquinche) hacia el hueco dejado. La dilución queda limitada a la "
+                        "sobrerrotura; a cambio el ciclo toma más tiempo y se manipulan dos disparos.")
+            if V.get("two_stage"):
+                g = H.groupby("etapa").agg(Taladros=("id", "count"), kg=("kg", "sum"))
+                g.index = ["Etapa 1 — veta", "Etapa 2 — caja"][:len(g)]
+                st.dataframe(g.round(2), width="stretch")
+        fig = go.Figure(go.Pie(labels=["Mineral", "Desmonte"], values=[V["T_o"], V["T_w"]], hole=0.5,
+                               marker=dict(colors=["#e6b41e", "#8c8c8c"]), sort=False))
+        fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0))
+        st.plotly_chart(fig, width="stretch")
 
 with tabs[2]:
     fp = res.frag

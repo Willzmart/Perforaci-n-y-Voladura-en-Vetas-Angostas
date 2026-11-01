@@ -161,3 +161,97 @@ def _summary_vein(res, bal, T_o, T_w, cost):
     S["Ley diluida"] = bal["ley_diluida"]
     if "Costo total por disparo (US$)" in S and bal["T_ore_pile"] > 0:
         S["Costo por tonelada de mineral (US$/t)"] = S["Costo total por disparo (US$)"] / bal["T_ore_pile"]
+
+
+# =============================================================================
+# Avance en desmonte (cruceros, accesos, by-pass, ventanas) en roca estéril
+# =============================================================================
+DESMONTE_TIPOS = {
+    "Crucero (permanente)": True,
+    "Acceso o ventana hacia la veta": True,
+    "By-pass / galería de servicio": True,
+    "Cámara de refugio o estocada": True,
+    "Galería exploratoria en desmonte (temporal)": False,
+}
+ACARREO = {
+    "Carretilla (≈ 0.08 m³)": 0.08,
+    "Carro minero U-35 (35 pie³ ≈ 0.99 m³)": 0.99,
+    "Carro minero U-60 (60 pie³ ≈ 1.70 m³)": 1.70,
+    "Pala neumática / scoop pequeño (≈ 0.5 m³)": 0.50,
+    "Personalizado": None,
+}
+DESMONTE_NOTE = ("Avance en desmonte: toda la roca volada es estéril, por lo que el diseño busca avance por "
+                 "disparo, buena fragmentación para el acarreo y un contorno estable. En labores permanentes "
+                 "(cruceros, accesos, by-pass) López Jimeno (cap. 22) recomienda voladura de contorno controlada "
+                 "para limitar la sobreexcavación y el sostenimiento. El desmonte puede usarse como relleno "
+                 "de tajeos de corte y relleno.")
+
+
+def run_avance_desmonte(section, rock, drill: Drill, exm, exc, o: AvanceOptions, tipo: str, haul: dict,
+                        plan: dict, cost=None):
+    """Avance horizontal en roca estéril.
+
+    haul: swell (fracción), overbreak (fracción), cap_m3, fill (factor de llenado)
+    plan: length (m de labor), shots_shift, shifts_day
+    """
+    res = run_avance(section, rock, drill, exm, exc, o, cost)
+    res.p["note"] = DESMONTE_NOTE
+    adv = res.p["adv"]
+    A_s = section.area
+    ob, sw = haul["overbreak"], haul["swell"]
+    V_th = A_s * adv
+    V_real = V_th * (1 + ob)
+    T = V_real * rock.rho
+    V_esp = V_real * (1 + sw)
+    cap = haul["cap_m3"] * haul["fill"]
+    trips = math.ceil(V_esp / cap) if cap > 0 else 0
+    kg = float(res.holes.kg.sum())
+    drill_m = res.summary["Perforación total (m)"]
+    n_shots = math.ceil(plan["length"] / adv) if adv > 0 else 0
+    shots_day = plan["shots_shift"] * plan["shifts_day"]
+    days = n_shots / shots_day if shots_day else float("nan")
+    lg = res.log
+    F = "8. Desmonte, acarreo y programa de avance"
+    lg.add(F, "Tipo de labor", "—", tipo, "", "")
+    lg.add(F, "Volumen teórico por disparo", "V", V_th, "m³", "A·avance")
+    lg.add(F, "Sobreexcavación", "s", ob * 100, "%", "según el control del contorno")
+    lg.add(F, "Volumen real in situ", "V_r", V_real, "m³", "V·(1 + s)")
+    lg.add(F, "Desmonte por disparo", "T", T, "t", "V_r·ρ_roca")
+    lg.add(F, "Esponjamiento", "e", sw * 100, "%")
+    lg.add(F, "Volumen esponjado a acarrear", "V_e", V_esp, "m³", "V_r·(1 + e)")
+    lg.add(F, "Capacidad útil por viaje", "C", cap, "m³", "capacidad × factor de llenado")
+    lg.add(F, "Viajes de acarreo por disparo", "N_v", trips, "", "⌈V_e / C⌉")
+    lg.add(F, "Explosivo por metro de avance", "kg/m", kg / adv if adv else float("nan"), "kg/m")
+    lg.add(F, "Perforación por metro de avance", "m/m", drill_m / adv if adv else float("nan"), "m/m")
+    lg.add(F, "Longitud de la labor", "L_lab", plan["length"], "m")
+    lg.add(F, "Disparos necesarios", "N_d", n_shots, "", "⌈L_lab / avance⌉")
+    lg.add(F, "Días de avance", "días", days, "d", f"N_d / ({plan['shots_shift']} disparo/guardia × "
+                                                        f"{plan['shifts_day']} guardias/día)")
+    lg.add(F, "Explosivo total para la labor", "—", kg * n_shots, "kg")
+    lg.add(F, "Desmonte total de la labor", "—", T * n_shots, "t")
+    S = res.summary
+    S["Desmonte por disparo (t)"] = T
+    S["Volumen esponjado por disparo (m³)"] = V_esp
+    S["Viajes de acarreo por disparo"] = trips
+    S["Explosivo por metro (kg/m)"] = kg / adv if adv else float("nan")
+    S["Perforación por metro (m/m)"] = drill_m / adv if adv else float("nan")
+    S["Disparos para la labor"] = n_shots
+    S["Días de avance"] = days
+    S["Explosivo total de la labor (kg)"] = kg * n_shots
+    S["Desmonte total de la labor (t)"] = T * n_shots
+    if "Costo total por disparo (US$)" in S:
+        S["Costo de perforación y voladura de la labor (US$)"] = S["Costo total por disparo (US$)"] * n_shots
+    res.p["desmonte"] = dict(T=T, V_th=V_th, V_real=V_real, V_esp=V_esp, trips=trips, n_shots=n_shots, days=days,
+                             kg_m=S["Explosivo por metro (kg/m)"], perm=DESMONTE_TIPOS.get(tipo, True))
+    perm = DESMONTE_TIPOS.get(tipo, True)
+    if perm and o.contour_mode.startswith("Sin"):
+        res.warnings.append("Labor permanente sin voladura controlada: considere recorte en el contorno para "
+                            "reducir la sobreexcavación y el sostenimiento (López Jimeno, cap. 22).")
+    A, Hh = section.width, section.height
+    if A < 1.5 or Hh < 1.5:
+        res.warnings.append(f"Sección de {A:.2f} × {Hh:.2f} m, menor al estándar de 1.5 × 1.5 m: revise el "
+                            "sostenimiento, la ventilación y la evacuación de heridos (camilla ≈ 0.55 m de ancho).")
+    if perm and (A < 1.8 or Hh < 2.1) and "Crucero" in tipo:
+        res.warnings.append("Un crucero permanente suele servir de vía de transporte y ventilación: una sección "
+                            "pequeña limita el acarreo con carros mineros y el paso de tuberías y mangas.")
+    return res
